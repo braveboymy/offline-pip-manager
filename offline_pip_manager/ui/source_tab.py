@@ -12,6 +12,8 @@ class SourceTab:
         self.app = app
         self.source_manager = app.source_manager
         self._source_frames: list = []
+        self._selected_index: int | None = None
+        self._radio_var = ctk.IntVar(value=-1)
         self._build_ui()
         self._refresh_list()
 
@@ -26,7 +28,7 @@ class SourceTab:
 
         desc = ctk.CTkLabel(
             self.parent,
-            text="管理 pip 镜像源列表。拖动或使用按钮调整优先级，排在上面的优先使用。",
+            text="管理 pip 镜像源列表。点击选中一行后用下方按钮操作。排在上面的优先使用。",
             font=ctk.CTkFont(size=12),
             text_color="gray",
         )
@@ -74,28 +76,47 @@ class SourceTab:
         # Column headers hint
         hint_frame = ctk.CTkFrame(self.list_frame, fg_color="transparent")
         hint_frame.pack(fill="x", padx=5, pady=(5, 0))
-        ctk.CTkLabel(hint_frame, text="序号 源名称", font=ctk.CTkFont(size=11), text_color="gray").pack(side="left")
-        ctk.CTkLabel(hint_frame, text="URL", font=ctk.CTkFont(size=11), text_color="gray").pack(side="right")
+        ctk.CTkLabel(hint_frame, text="", width=30).pack(side="left")  # radio spacer
+        ctk.CTkLabel(hint_frame, text="序号", width=40, font=ctk.CTkFont(size=11), text_color="gray").pack(side="left")
+        ctk.CTkLabel(hint_frame, text="启用", width=40, font=ctk.CTkFont(size=11), text_color="gray").pack(side="left")
+        ctk.CTkLabel(hint_frame, text="源名称", width=80, font=ctk.CTkFont(size=11), text_color="gray").pack(side="left")
+        ctk.CTkLabel(hint_frame, text="URL", font=ctk.CTkFont(size=11), text_color="gray").pack(side="left", fill="x", expand=True)
 
     def _refresh_list(self):
         """Rebuild the source list from the source manager."""
-        # Clear existing
         for frame in self._source_frames:
             frame.destroy()
         self._source_frames.clear()
 
         sources = self.source_manager.load()
+        self._radio_var = ctk.IntVar(value=self._selected_index if self._selected_index is not None and self._selected_index < len(sources) else -1)
+
         for idx, src in enumerate(sources):
             self._add_source_row(idx, src)
 
     def _add_source_row(self, idx: int, src: dict):
         """Add a single source row to the list."""
-        frame = ctk.CTkFrame(self.list_frame)
+        is_selected = (idx == self._selected_index)
+        bg = self._get_row_color(is_selected)
+
+        frame = ctk.CTkFrame(self.list_frame, fg_color=bg)
         frame.pack(fill="x", padx=5, pady=2)
+
+        # Click on frame to select
+        for widget in (frame,):
+            widget.bind("<Button-1>", lambda e, i=idx: self._select_row(i))
+
+        # Radio button for selection
+        rb = ctk.CTkRadioButton(
+            frame, text="", width=20, variable=self._radio_var, value=idx,
+            command=lambda i=idx: self._select_row(i),
+        )
+        rb.pack(side="left", padx=(5, 5))
 
         # Index
         idx_label = ctk.CTkLabel(frame, text=str(idx + 1), width=35, font=ctk.CTkFont(size=13))
-        idx_label.pack(side="left", padx=(5, 0))
+        idx_label.pack(side="left", padx=(0, 5))
+        idx_label.bind("<Button-1>", lambda e, i=idx: self._select_row(i))
 
         # Enabled checkbox
         var = ctk.BooleanVar(value=src.get("enabled", True))
@@ -108,20 +129,46 @@ class SourceTab:
         # Name
         name_label = ctk.CTkLabel(frame, text=src["name"], width=80, anchor="w", font=ctk.CTkFont(size=13))
         name_label.pack(side="left")
+        name_label.bind("<Button-1>", lambda e, i=idx: self._select_row(i))
 
         # URL
         url_label = ctk.CTkLabel(
             frame, text=src["url"], anchor="w",
             font=ctk.CTkFont(size=11),
-            text_color="gray",
+            text_color="gray" if not is_selected else "white",
         )
         url_label.pack(side="left", fill="x", expand=True, padx=10)
+        url_label.bind("<Button-1>", lambda e, i=idx: self._select_row(i))
 
         self._source_frames.append(frame)
 
+    def _get_row_color(self, selected: bool) -> str:
+        """Get background color for a row based on selection state."""
+        if selected:
+            return "#1f538d"  # highlighted blue
+        return "transparent"
+
+    def _select_row(self, index: int):
+        """Select a row by index."""
+        self._selected_index = index
+        self._radio_var.set(index)
+        self._refresh_list()
+        src = self.source_manager.load()[index]
+        self.app.set_status(f"已选中: {src['name']}")
+
+    def _get_selected_or_warn(self) -> int | None:
+        """Return the selected index, or show warning if nothing selected."""
+        if self._selected_index is None or self._selected_index < 0:
+            messagebox.showinfo("提示", "请先在列表中选择一个镜像源（点击行或单选按钮）。")
+            return None
+        sources = self.source_manager.load()
+        if self._selected_index >= len(sources):
+            self._selected_index = None
+            return None
+        return self._selected_index
+
     def _on_toggle(self, index: int, enabled: bool):
         """Handle enable/disable toggle."""
-        # The toggle checkbox already set the new value, we just need to sync
         sources = self.source_manager.load()
         if 0 <= index < len(sources):
             if sources[index].get("enabled") != enabled:
@@ -147,50 +194,63 @@ class SourceTab:
             return
 
         self.source_manager.add(name, url)
+        self._selected_index = None
         self._refresh_list()
         self.app.set_status(f"已添加源: {name}")
 
     def _remove_source(self):
-        """Remove the last selected source."""
-        sources = self.source_manager.load()
-        if not sources:
+        """Remove the selected source."""
+        idx = self._get_selected_or_warn()
+        if idx is None:
             return
 
-        # Remove the last one (simple approach - user can use buttons to reorder)
-        last = sources[-1]
-        ok = messagebox.askyesno("确认删除", f"确定要删除镜像源 '{last['name']}' 吗？")
+        sources = self.source_manager.load()
+        src = sources[idx]
+        ok = messagebox.askyesno("确认删除", f"确定要删除镜像源 '{src['name']}' 吗？")
         if ok:
-            self.source_manager.remove(len(sources) - 1)
+            self.source_manager.remove(idx)
+            self._selected_index = None
             self._refresh_list()
-            self.app.set_status(f"已删除源: {last['name']}")
+            self.app.set_status(f"已删除源: {src['name']}")
 
     def _move_up(self):
-        """Move a source up in priority. Find first non-first enabled source."""
-        sources = self.source_manager.load()
-        # Find the last selected / prominent source to move
-        # For simplicity, move the last element up
-        if len(sources) > 1:
-            self.source_manager.move_up(len(sources) - 1)
-            self._refresh_list()
-            self.app.set_status("已上移")
-
-    def _move_down(self):
-        """Move a source down in priority."""
-        sources = self.source_manager.load()
-        if len(sources) > 1:
-            self.source_manager.move_down(len(sources) - 2)
-            self._refresh_list()
-            self.app.set_status("已下移")
-
-    def _test_connection(self):
-        """Test connection to the last source."""
-        sources = self.source_manager.load()
-        if not sources:
-            messagebox.showinfo("提示", "没有可测试的镜像源。")
+        """Move selected source up in priority."""
+        idx = self._get_selected_or_warn()
+        if idx is None:
+            return
+        if idx == 0:
+            messagebox.showinfo("提示", "已经是第一位，无法上移。")
             return
 
-        # Test the last source
-        src = sources[-1]
+        self.source_manager.move_up(idx)
+        self._selected_index = idx - 1
+        self._refresh_list()
+        self.app.set_status("已上移")
+
+    def _move_down(self):
+        """Move selected source down in priority."""
+        idx = self._get_selected_or_warn()
+        if idx is None:
+            return
+
+        sources = self.source_manager.load()
+        if idx >= len(sources) - 1:
+            messagebox.showinfo("提示", "已经是最后一位，无法下移。")
+            return
+
+        self.source_manager.move_down(idx)
+        self._selected_index = idx + 1
+        self._refresh_list()
+        self.app.set_status("已下移")
+
+    def _test_connection(self):
+        """Test connection to the selected source."""
+        idx = self._get_selected_or_warn()
+        if idx is None:
+            return
+
+        sources = self.source_manager.load()
+        src = sources[idx]
         self.app.set_status(f"正在测试 {src['name']} ...")
         self.test_btn.configure(state="disabled", text="测试中...")
         self.parent.update()
