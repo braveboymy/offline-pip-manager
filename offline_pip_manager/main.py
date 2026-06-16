@@ -26,6 +26,7 @@ def check_pip():
         subprocess.run(
             [get_python(), "-m", "pip", "--version"],
             capture_output=True, check=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
