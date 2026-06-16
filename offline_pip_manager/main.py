@@ -8,11 +8,23 @@ import sys
 import subprocess
 
 
+def get_python() -> str:
+    """Return the correct Python executable to use for pip subprocess.
+
+    When packaged by PyInstaller (sys.frozen=True), sys.executable points to
+    the packaged .exe itself. Using it to run pip would re-launch the GUI app
+    in an infinite loop. We must use the system Python instead.
+    """
+    if getattr(sys, "frozen", False):
+        return "python"  # use system PATH
+    return sys.executable  # dev mode: use current interpreter
+
+
 def check_pip():
     """Verify pip is available."""
     try:
         subprocess.run(
-            [sys.executable, "-m", "pip", "--version"],
+            [get_python(), "-m", "pip", "--version"],
             capture_output=True, check=True,
         )
         return True

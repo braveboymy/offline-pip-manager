@@ -2,8 +2,18 @@
 
 import subprocess
 import sys
-import threading
 from typing import Callable, Optional
+
+
+def _get_python() -> str:
+    """Return the correct Python executable.
+
+    When running as a PyInstaller bundle, sys.executable is the .exe itself.
+    Using it for 'python -m pip' would re-spawn the GUI → infinite loop.
+    """
+    if getattr(sys, "frozen", False):
+        return "python"
+    return sys.executable
 
 
 class Downloader:
@@ -56,7 +66,7 @@ class Downloader:
             self._emit_progress(on_progress, 5)
 
             cmd = [
-                sys.executable, "-m", "pip", "download",
+                _get_python(), "-m", "pip", "download",
                 pkg_spec,
                 "-d", self._store_dir,
                 "-i", source_url,
