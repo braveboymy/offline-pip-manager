@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.spec
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local packages (user data, don't commit)
+offline_pip_manager/offline_packages/*
+!offline_pip_manager/offline_packages/.gitkeep
+
+# Config overrides (optional)
+# offline_pip_manager/config.local.json
