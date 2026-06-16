@@ -110,7 +110,7 @@ class DownloadTab:
             self.app.store_dir = d
 
     def _search(self):
-        """Search PyPI for a package."""
+        """Search PyPI for a package with mirror source failover."""
         query = self.search_entry.get().strip()
         if not query:
             return
@@ -120,46 +120,64 @@ class DownloadTab:
         self.parent.update()
 
         def do_search():
-            try:
-                url = f"https://pypi.org/pypi/{query}/json"
-                req = urllib.request.Request(url)
-                req.add_header("User-Agent", "OfflinePipManager/1.0")
-                req.add_header("Accept", "application/json")
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
+            # Build JSON API URLs from enabled sources
+            # e.g. https://pypi.tuna.tsinghua.edu.cn/simple → https://pypi.tuna.tsinghua.edu.cn/pypi/{name}/json
+            sources = self.app.source_manager.get_enabled()
 
-                info = data.get("info", {})
-                name = info.get("name", query)
-                summary = info.get("summary", "")
-                version = info.get("version", "0.0.0")
-                versions = list(data.get("releases", {}).keys())
+            for idx, src in enumerate(sources):
+                base = src["url"].rstrip("/").replace("/simple", "")
+                url = f"{base}/pypi/{query}/json"
+                src_name = src["name"]
 
-                # Filter to non-prerelease, sort by version
-                from packaging.version import parse as parse_version
-                parsed_versions = []
-                for v in versions:
-                    try:
-                        pv = parse_version(v)
-                        if not pv.is_prerelease:
-                            parsed_versions.append((pv, v))
-                    except Exception:
-                        pass
-                parsed_versions.sort(key=lambda x: x[0], reverse=True)
-                sorted_versions = [v for _, v in parsed_versions]
+                try:
+                    req = urllib.request.Request(url)
+                    req.add_header("User-Agent", "OfflinePipManager/1.0")
+                    req.add_header("Accept", "application/json")
+                    # Short timeout per source for snappy feel, pypi.org gets longer
+                    timeout = 5 if "pypi.org" not in url else 10
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
 
-                self.result = {
-                    "name": name,
-                    "summary": summary,
-                    "versions": sorted_versions if sorted_versions else [version],
-                }
-                self.parent.after(0, self._on_search_success)
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    self.parent.after(0, lambda: self._on_search_error("未找到该包，请检查包名是否正确。"))
-                else:
-                    self.parent.after(0, lambda: self._on_search_error(f"搜索失败: HTTP {e.code}"))
-            except Exception as e:
-                self.parent.after(0, lambda: self._on_search_error(f"搜索失败: {e}"))
+                    info = data.get("info", {})
+                    name = info.get("name", query)
+                    summary = info.get("summary", "")
+                    version = info.get("version", "0.0.0")
+                    versions = list(data.get("releases", {}).keys())
+
+                    # Filter to non-prerelease, sort by version
+                    from packaging.version import parse as parse_version
+                    parsed_versions = []
+                    for v in versions:
+                        try:
+                            pv = parse_version(v)
+                            if not pv.is_prerelease:
+                                parsed_versions.append((pv, v))
+                        except Exception:
+                            pass
+                    parsed_versions.sort(key=lambda x: x[0], reverse=True)
+                    sorted_versions = [v for _, v in parsed_versions]
+
+                    self.result = {
+                        "name": name,
+                        "summary": summary,
+                        "versions": sorted_versions if sorted_versions else [version],
+                    }
+                    self.parent.after(0, self._on_search_success)
+                    self.parent.after(0, lambda s=src_name: self.app.set_status(f"搜索完成 (源: {s})"))
+                    return
+
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        self.parent.after(0, lambda: self._on_search_error("未找到该包，请检查包名是否正确。"))
+                        return
+                    # Other HTTP errors: try next source
+                    continue
+                except Exception:
+                    # Network error / timeout: try next source
+                    continue
+
+            # All sources failed
+            self.parent.after(0, lambda: self._on_search_error("搜索失败: 所有镜像源均无法访问。请检查网络或源配置。"))
 
         threading.Thread(target=do_search, daemon=True).start()
 
