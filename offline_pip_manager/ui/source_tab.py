@@ -244,7 +244,7 @@ class SourceTab:
         self.app.set_status("已下移")
 
     def _test_connection(self):
-        """Test connection to the selected source."""
+        """Test connection to the selected source (runs in background thread)."""
         idx = self._get_selected_or_warn()
         if idx is None:
             return
@@ -253,14 +253,22 @@ class SourceTab:
         src = sources[idx]
         self.app.set_status(f"正在测试 {src['name']} ...")
         self.test_btn.configure(state="disabled", text="测试中...")
-        self.parent.update()
 
-        ok, msg = self.source_manager.test_connection(src["url"])
+        import threading
+
+        def do_test():
+            ok, msg = self.source_manager.test_connection(src["url"])
+            self.parent.after(0, lambda: self._on_test_done(ok, msg, src["name"]))
+
+        threading.Thread(target=do_test, daemon=True).start()
+
+    def _on_test_done(self, ok: bool, msg: str, name: str):
+        """Handle test connection result on UI thread."""
         self.test_btn.configure(state="normal", text="测试连接")
 
         if ok:
-            messagebox.showinfo("测试结果", f"✓ {src['name']}\n{msg}")
+            messagebox.showinfo("测试结果", f"✓ {name}\n{msg}")
         else:
-            messagebox.showwarning("测试结果", f"✗ {src['name']}\n{msg}")
+            messagebox.showwarning("测试结果", f"✗ {name}\n{msg}")
 
-        self.app.set_status(f"测试完成: {src['name']} - {msg}")
+        self.app.set_status(f"测试完成: {name} - {msg}")
